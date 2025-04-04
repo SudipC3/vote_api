@@ -3,6 +3,11 @@ const router = express.Router();
 const User = require('./../models/user');
 const {jwtAuthMiddleware, generateToken} = require('./../jwt');
 
+// Demo route to check if the router works
+router.get('/', (req, res) => {
+    res.send('User route is working!');
+});
+
 // POST route to add a person
 router.post('/signup', async (req, res) =>{
     try{
@@ -84,7 +89,7 @@ router.get('/profile', jwtAuthMiddleware, async (req, res) => {
     try{
         const userData = req.user;
         const userId = userData.id;
-        const user = await User.findById(userId);
+        const user = await User.findById(userId).select('-password -__v -_id');
         res.status(200).json({user});
     }catch(err){
         console.error(err);
@@ -122,4 +127,16 @@ router.put('/profile/password', jwtAuthMiddleware, async (req, res) => {
     }
 });
 
+// Additional test route
+router.get('/test', (req, res) => {
+    console.log('Accessed /user/test');
+    res.send('User route test endpoint is working!');
+});
+
+router.use((req, res) => {
+    res.status(404).send('This route does not exist on /user.');
+});
+
+
+// Export the router
 module.exports = router;

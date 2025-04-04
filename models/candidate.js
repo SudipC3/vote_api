@@ -24,15 +24,28 @@ const candidateSchema = new mongoose.Schema({
             },
             votedAt: {
                 type: Date,
-                default: Date.now()
+                default: Date.now
+            },
+            year: {
+                type: Number,
+                required: true // Store the year of the vote
             }
         }
     ],
-    voteCount: {
-        type: Number,
-        default: 0
-    }
+    voteCountsByYear: [
+        {
+            year: {
+                type: Number,
+                required: true
+            },
+            count: {
+                type: Number,
+                default: 0
+            }
+        }
+    ]
 });
+
 
 const Candidate = mongoose.model('Candidate', candidateSchema);
 module.exports = Candidate;

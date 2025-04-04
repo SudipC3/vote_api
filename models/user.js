@@ -15,16 +15,17 @@ const userSchema = new mongoose.Schema({
         type: String
     },
     mobile: {
-        type: String
+        type: String,
+        required: true
     },
     address: {
         type: String,
         required: true
     },
     aadharCardNumber: {
-        type: Number,
+        type: String,
         required: true,
-        unqiue: true
+        unique: true
     },
     password: {
         type: String,
@@ -35,11 +36,20 @@ const userSchema = new mongoose.Schema({
         enum: ['voter', 'admin'],
         default: 'voter'
     },
-    isVoted: {
-        type: Boolean,
-        default: false
-    }
+    votingHistory: [
+        {
+            year: {
+                type: Number,
+                required: true
+            },
+            partyVoted: {
+                type: String,
+                required: true
+            }
+        }
+    ]
 });
+
 
 
 userSchema.pre('save', async function(next){

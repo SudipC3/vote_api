@@ -18,19 +18,29 @@ const checkAdminRole = async (userID) => {
 
 // POST route to add a candidate
 router.post('/', jwtAuthMiddleware, async (req, res) =>{
-    try{
-        if(!(await checkAdminRole(req.user.id)))
+    const { name, party, age } = req.body;
+
+    try {
+        if(!checkAdminRole(req.user.id))
             return res.status(403).json({message: 'user does not have admin role'});
 
-        const data = req.body // Assuming the request body contains the candidate data
+        // Validate request body
+        if (!name || !party || !age) {
+            return res.status(400).json({ error: 'All fields (name, party, age) are required.' });
+        }
+        // Create a new candidate instance
+        const newCandidate = new Candidate({
+            name,
+            party,
+            age,
+            votes: [],
+            voteCountsByYear: []
+        });
 
-        // Create a new User document using the Mongoose model
-        const newCandidate = new Candidate(data);
+        // Save the candidate to the database
+        await newCandidate.save();
 
-        // Save the new user to the database
-        const response = await newCandidate.save();
-        console.log('data saved');
-        res.status(200).json({response: response});
+        res.status(201).json({ message: 'Candidate created successfully', candidate: newCandidate });
     }
     catch(err){
         console.log(err);
@@ -85,79 +95,97 @@ router.delete('/:candidateID', jwtAuthMiddleware, async (req, res)=>{
 })
 
 // let's start voting
-router.get('/vote/:candidateID', jwtAuthMiddleware, async (req, res)=>{
+router.post('/vote', jwtAuthMiddleware, async (req, res)=>{
     // no admin can vote
     // user can only vote once
-    
-    candidateID = req.params.candidateID;
-    userId = req.user.id;
+    const { candidateId } = req.body;
+    const currentYear = new Date().getFullYear();
+    const userId = req.user._id;
 
-    try{
-        // Find the Candidate document with the specified candidateID
-        const candidate = await Candidate.findById(candidateID);
-        if(!candidate){
-            return res.status(404).json({ message: 'Candidate not found' });
-        }
-
+    try {
+        // Check if user has already voted this year
         const user = await User.findById(userId);
-        if(!user){
-            return res.status(404).json({ message: 'user not found' });
-        }
-        if(user.role == 'admin'){
-            return res.status(403).json({ message: 'admin is not allowed'});
-        }
-        if(user.isVoted){
-            return res.status(400).json({ message: 'You have already voted' });
+        if (user.votingHistory.some(vote => vote.year === currentYear)) {
+            return res.status(400).json({ message: "You've already voted this year." });
         }
 
-        // Update the Candidate document to record the vote
-        candidate.votes.push({user: userId})
-        candidate.voteCount++;
-        await candidate.save();
+        // Validate voting time for the current year
+        const votingTime = await VotingTime.findOne({ year: currentYear });
+        if (!votingTime) {
+            return res.status(400).json({ message: "Voting period not set for this year." });
+        }
 
-        // update the user document
-        user.isVoted = true
+        const now = new Date();
+        if (now < votingTime.startDate || now > votingTime.endDate) {
+            return res.status(400).json({ message: "Voting is not open for this period." });
+        }
+
+        const [hour, minute] = now.toTimeString().split(':');
+        const [dailyStartHour, dailyStartMinute] = votingTime.dailyStartTime.split(':');
+        const [dailyEndHour, dailyEndMinute] = votingTime.dailyEndTime.split(':');
+
+        const isWithinDailyTime = (
+            (hour > dailyStartHour || (hour == dailyStartHour && minute >= dailyStartMinute)) &&
+            (hour < dailyEndHour || (hour == dailyEndHour && minute <= dailyEndMinute))
+        );
+
+        if (!isWithinDailyTime) {
+            return res.status(400).json({ message: "Voting is only allowed between the set hours." });
+        }
+
+        // Record the vote
+        await Candidate.findByIdAndUpdate(candidateId, {
+            $push: {
+                votes: { user: userId, votedAt: now, year: currentYear }
+            },
+            $inc: { "voteCountsByYear.$[elem].count": 1 }
+        }, { arrayFilters: [{ "elem.year": currentYear }], upsert: true });
+
+        user.votingHistory.push({ year: currentYear, partyVoted: candidateId });
         await user.save();
 
-        return res.status(200).json({ message: 'Vote recorded successfully' });
-    }catch(err){
-        console.log(err);
-        return res.status(500).json({error: 'Internal Server Error'});
+        res.status(200).json({ message: "Vote recorded successfully!" });
+    }  catch (error) {
+        console.error('Error registering vote:', error);
+        res.status(500).json({ error: 'An error occurred while registering the vote' });
     }
 });
 
-// vote count 
-router.get('/vote/count', async (req, res) => {
-    try{
-        // Find all candidates and sort them by voteCount in descending order
-        const candidate = await Candidate.find().sort({voteCount: 'desc'});
 
-        // Map the candidates to only return their name and voteCount
-        const voteRecord = candidate.map((data)=>{
-            return {
-                party: data.party,
-                count: data.voteCount
-            }
-        });
-
-        return res.status(200).json(voteRecord);
-    }catch(err){
-        console.log(err);
-        res.status(500).json({error: 'Internal Server Error'});
-    }
-});
-
-// Get List of all candidates with only name and party fields
+// Get List of all candidates with only name and party fields 
 router.get('/', async (req, res) => {
     try {
         // Find all candidates and select only the name and party fields, excluding _id
-        const candidates = await Candidate.find({}, 'name party -_id');
+        const candidates = await Candidate.find({}, 'name party');
 
         // Return the list of candidates
         res.status(200).json(candidates);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
+
+router.get('/total-vote-count', jwtAuthMiddleware, async (req, res) => {
+    try {
+
+        // Retrieve all candidates and calculate total votes
+        const candidates = await Candidate.find();
+
+        const totalVoteCounts = candidates.map(candidate => {
+            const totalVotes = candidate.voteCountsByYear.reduce((sum, entry) => sum + entry.count, 0);
+            return {
+                name: candidate.name,
+                party: candidate.party,
+                totalVotes: totalVotes
+            };
+        });
+
+        res.status(200).json(totalVoteCounts);
+    } catch (error) {
+        console.error('Error retrieving total vote count:', error);
+        res.status(500).json({ error: 'An error occurred while retrieving total vote counts' });
     }
 });
 
